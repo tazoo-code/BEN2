@@ -1176,7 +1176,7 @@ class BEN_Base(
                 image_masked = refine_foreground_process(original_image, pred_pil)
 
                 image_masked.putalpha(pred_pil.resize(original_image.size))
-                return image_masked
+                return image_masked, mask
 
             else:
                 alpha = postprocess_image(res, im_size=[w, h])
@@ -1185,10 +1185,11 @@ class BEN_Base(
                 original_image.putalpha(mask)
                 # mask = Image.fromarray(alpha)
 
-                return original_image
+                return original_image, mask
 
         else:
             foregrounds = []
+            masks = []
             for batch in image:
                 image, h, w, original_image = rgb_loader_refiner(batch)
                 if torch.cuda.is_available():
@@ -1210,9 +1211,10 @@ class BEN_Base(
                 if refine_foreground == True:
                     pred_pil = transforms.ToPILImage()(res.squeeze())
                     image_masked = refine_foreground_process(original_image, pred_pil)
+                    mask = pred_pil.resize(original_image.size)
+                    image_masked.putalpha(mask)
 
-                    image_masked.putalpha(pred_pil.resize(original_image.size))
-
+                    masks.append(mask)
                     foregrounds.append(image_masked)
                 else:
                     alpha = postprocess_image(res, im_size=[w, h])
@@ -1220,9 +1222,10 @@ class BEN_Base(
                     mask = pred_pil.resize(original_image.size)
                     original_image.putalpha(mask)
                     # mask = Image.fromarray(alpha)
+                    masks.append(mask)
                     foregrounds.append(original_image)
 
-            return foregrounds
+            return foregrounds, masks
 
     def segment_video(
         self,
@@ -1291,6 +1294,7 @@ class BEN_Base(
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
         foregrounds = []
+        masks = []
         frame_idx = 0
         processed_count = 0
         batch_frames = []
@@ -1300,11 +1304,13 @@ class BEN_Base(
             ret, frame = cap.read()
             if not ret:
                 if batch_frames:
-                    batch_results = self.inference(batch_frames, refine_foreground)
+                    batch_results, batch_masks = self.inference(batch_frames, refine_foreground)
                     if isinstance(batch_results, Image.Image):
                         foregrounds.append(batch_results)
+                        masks.append(batch_masks)
                     else:
                         foregrounds.extend(batch_results)
+                        masks.append(batch_masks)
                     if print_frames_processed:
                         print(
                             f"Processed frames {frame_idx-len(batch_frames)+1} to {frame_idx} of {total_frames}"
@@ -1317,11 +1323,13 @@ class BEN_Base(
             batch_frames.append(pil_frame)
 
             if len(batch_frames) == batch:
-                batch_results = self.inference(batch_frames, refine_foreground)
+                batch_results, batch_masks = self.inference(batch_frames, refine_foreground)
                 if isinstance(batch_results, Image.Image):
                     foregrounds.append(batch_results)
+                    masks.append(batch_masks)
                 else:
                     foregrounds.extend(batch_results)
+                    masks.append(batch_masks)
                 if print_frames_processed:
                     print(
                         f"Processed frames {frame_idx-batch+1} to {frame_idx} of {total_frames}"
@@ -1451,7 +1459,7 @@ def pil_images_to_webm_alpha(images, output_path, fps=30):
         ffmpeg_cmd = [
             "ffmpeg",
             "-y",
-            "-framerate",
+            "-framerate",  
             str(fps),
             "-i",
             os.path.join(tmpdir, "%06d.png"),
